@@ -19,7 +19,7 @@ def mdtolatex(text: str) -> str:
 
 % Colors for the hyperref package
 \\definecolor{urlcolor}{rgb}{0,.145,.698}
-%\\definecolor{linkcolor}{rgb}{.71,0.21,0.01}
+\\definecolor{linkcolor}{rgb}{.71,0.21,0.01}
 \\definecolor{citecolor}{rgb}{.12,.54,.11}
 
 
@@ -79,16 +79,19 @@ def mdtolatex(text: str) -> str:
 
 
 % To number sections up to subsubsections
-\\setcounter{secnumdepth}{4}
+\\setcounter{secnumdepth}{3}
 
 % Setup hyperref package
 \\hypersetup{
   breaklinks=true,  % so long urls are correctly broken across lines
   colorlinks=true,
-  urlcolor=urlcolor,
+%  urlcolor=urlcolor,
+  urlcolor=blue,
   linkcolor=linkcolor,
   citecolor=citecolor,
 }
+
+\\urlstyle{same} % To set the same font for urls as the surrounding text
 
 \\renewcommand{\\appendixpagename}{Annexes}
 \\renewcommand{\\appendixtocname}{Annexes}
@@ -103,35 +106,76 @@ def mdtolatex(text: str) -> str:
 \\fancyhead[C]{\\leftmark} % En-tête centre
 \\fancyhead[R]{TN09} % En-tête droite
 \\fancyfoot[C]{\\thepage} % Numéro de page en bas à droite
+
+% Ajuster l'espacement après les paragraphes pour aller à la ligne
+\\let\\oldparagraph\\paragraph
+\\renewcommand{\\paragraph}[1]{\\oldparagraph{#1}\\mbox{}\\par}
+
 % Permettre les sauts de ligne dans les en-têtes
 \\renewcommand{\\chaptermark}[1]{\\markboth{\\thechapter.\\ #1}{}}
 \\renewcommand{\\sectionmark}[1]{\\markright{\\thesection.\\ #1}}
+
+% Mettre en valeur le texte en italique (à des fins de débug seulement, pour savoir ce qu'il reste à modifier)
+%\\renewcommand{\\emph}[1]{\\emph{\\color{red}#1}}
 """
 
     regex_patterns = {
+        r'^---\n((?:(?!---).)*)\n---$': '',
         r'^# (.*)$': r'\\chapter{\1}\n\\label{sec:\1}',
         r'^## (.*)$': r'\\section{\1}\n\\label{sec:\1}',
         r'^### (.*)$': r'\\subsection{\1}\n\\label{sec:\1}',
         r'^#### (.*)$': r'\\subsubsection{\1}\n\\label{sec:\1}',
         r'^##### (.*)$': r'\\paragraph{\1}\n\\label{sec:\1}',
-        r'\n\\label\{sec:([^ \}]*) ([^\}]*)\}': r'\n\\label{sec:\1-\2}', #replace space with dash in labels
+        r'\n\\label\{sec:([^ \}]*)[ `",:]([^\}]*)\}': r'\n\\label{sec:\1-\2}', #replace some chars with dash in labels
+        r'\[\^(?P<foo>.*)\](.*)\s*\[\^(?P=foo)\]: (.*)\n': r'\\footnote{\3}\2', # Footnotes
         r'==(.*)==': r'\1', # Highlighting (no direct LaTeX equivalent)
         r'^(.*)\*\*\*(.*)\*\*\*(.*)$': r'\1\\textbf{\\textit{\2}}\3', # Bold and Italic text
         r'^(.*)\*\*(.*)\*\*(.*)$': r'\1\\textbf{\2}\3', # Bold text
-        r'^(.*)\*(.*)\*(.*)$': r'\1\\textit{\2}\3', # Italic text
-        r'\[([^\[\]]*)\]\(([^\(\)]*)\)' : r'\\href{\2}{\1}', # Markdown links to LaTeX href
-        r'([^\\])([&%])' : r'\1\\\2', # Escape special LaTeX characters
+        # r'^(.*)\*(.*)\*(.*)$': r'\1\\textit{\2}\3', # Italic text
+        r'^(.*)\*([^\*\n]*)\*(.*)$': r'\1\\emph{\\color{red}\2}\3', # Italic text
         r'^\[\/\/\]: # \((.*)\)$' : r'% \1', # Markdown comments to LaTeX comments
+        r'!\[\[(.*)\]\]' : r'% \1', # Images
+        r'\[([^\[\]]*)\]\(([^\(\)]*)\)' : r'\\href{\2}{\1}', # Markdown links to LaTeX href
         r'\[\[([^#]*)#([^\[\]\|]*)\]\]' : r'[[\1#\2|\2]]', # Internal links to LaTeX references without custom text to custom text
-        r'\[\[([^#]*)#([^\| ]*) ([^\|]*)\|([^\[\]]*)\]\]' : r'[[\1#\2-\3|\4]]', #replace space with dash in internal links
+        r'\[\[([^#]*)#([^\| ]*)[ `",:]([^\|]*)\|([^\[\]]*)\]\]' : r'[[\1#\2-\3|\4]]', #replace space with dash in internal links
         r'\[\[[^#]*#([^\|]*)\|([^\[\]]*)\]\]' : r'\\href{sec:\1}{\2}', # Internal links to LaTeX references with custom text
         r'\n\\\+' : '\n+', # Unescape plus signs at start of line
-        r'^```([^\n]*)\n([^(?:```)]*)\n```' : r'\\begin{verbatim}\n\2\n\\end{verbatim}', # Code blocks
+        r'^```([^\n]*)\n((?:(?!```).|\s)*)\n```' : r'\\begin{verbatim}\n\2\n\\end{verbatim}', # Code blocks
         r'`([^`\n]*)`' : r'\\texttt{\1}', # Inline code
+        r'\\texttt\{([^\}]*)(?<!\\)\$([^\}]*)\}' : r'\\texttt{\1\\$\2}', # Dollar signs in inline code
+        r'\$\$([^\$]+)\$\$' : r'\\[\1\\]', # Display math
+        r'(?<!\\)\$([^\$]+)\$' : r'\\(\1\\)', # Inline math
+        r'(?<!\{)(https?://[^\s\)\]\}]+)' : r'\\url{\1}', # Plain URLs
+        # r'^- (.*)$': r'    \\item \1', # List items
+        # r'(?<!\\begin\{itemize\}\n)((?:    \\item [^\n]*\n)+)(?!\\end\{itemize\})': r'\\begin{itemize}\n\1\\end{itemize}\n', # Itemize environment
     }
 
     for pattern, replacement in regex_patterns.items():
         while re.search(pattern, text, flags=re.MULTILINE):
             text = re.sub(pattern, replacement, text, flags=re.MULTILINE)
 
+    # Escape special LaTeX characters except in math mode
+    in_math_mode = False
+    at_beginning_of_line = True
+    i = 0
+    while i < len(text):
+      # if text[i] == '\\':
+      #   if i + 1 < len(text):
+      #     next_char = text[i + 1]
+      #     if next_char == '(' or next_char == ')':
+      #       in_math_mode = not in_math_mode
+      #       i += 1
+      #     elif next_char == '[' or next_char == ']':
+      #       if i + 2 < len(text) and text[i + 2] == '\\[' or text[i + 2] == '\\]':
+      #         in_math_mode = not in_math_mode
+      #         i += 3
+
+      if text[i:i+2] == '\\(' or text[i:i+2] == '\\)' or text[i:i+2] == '\\[' or text[i:i+2] == '\\]':
+        in_math_mode = not in_math_mode
+        i += 2
+      elif not in_math_mode and not at_beginning_of_line and text[i] in ['&', '%', '_']:
+        text = text[:i] + '\\' + text[i:]
+        i += 1
+      at_beginning_of_line = (text[i] == '\n')
+      i += 1
     return setup + "\n\\begin{document}\n\\maketitle\n\n" + text + "\n\n\\tableofcontents\n\n\\end{document}\n"
